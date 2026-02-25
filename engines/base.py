@@ -41,15 +41,15 @@ class BaseEngine(ABC):
         Classify a win probability into a named confidence tier.
 
         Tiers:
-            LOCK   (75%+)    — highest conviction
-            STRONG (65-74%)  — strong pick
-            LEAN   (56-64%)  — slight lean
-            SKIP   (<56%)    — too close to call
+            LOCK     (75%+)    — highest conviction
+            STRONG   (65-74%)  — strong pick
+            LEAN     (55-64%)  — slight lean
+            TOSS-UP  (<55%)    — too close to call
         """
         if prob >= 0.75:
             return "LOCK"
         if prob >= 0.65:
             return "STRONG"
-        if prob >= 0.56:
+        if prob >= 0.55:
             return "LEAN"
-        return "SKIP"
+        return "TOSS-UP"
