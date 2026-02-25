@@ -20,6 +20,9 @@ logging:
   ring_buffer_size: 500     # lines kept in memory for Console tab
 
 apis:
+  osws:
+    base_url: "http://localhost:8001"
+    enabled: true
   hudstats:
     base_url: "https://api-h2h.hudstats.com/v1"
     enabled: true

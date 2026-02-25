@@ -14,6 +14,7 @@ from sports.base import BaseSportAdapter
 from sports.ebasketball.api_esportsbattle import esportsbattle_client
 from sports.ebasketball.api_hudstats import hudstats_client
 from sports.ebasketball.api_odds import odds_client
+from sports.ebasketball.api_osws import osws_client
 from sports.ebasketball.metrics import compute_all_metrics
 
 log = get_logger(__name__)
@@ -40,7 +41,14 @@ class EBasketballAdapter(BaseSportAdapter):
     """
 
     async def get_live(self) -> List[Dict[str, Any]]:
-        """Return live matches from HudStats + ESportsBattle, deduplicated."""
+        """Return live matches from OSWS (primary), HudStats, and ESportsBattle."""
+        # Try OSWS first
+        osws_live: List[Dict[str, Any]] = []
+        try:
+            osws_live = await osws_client.get_live_matches()
+        except Exception as exc:
+            log.debug("OSWS live fetch failed: %s", exc)
+
         try:
             hudstats_live = await hudstats_client.get_live_matches()
         except Exception as exc:
@@ -55,7 +63,7 @@ class EBasketballAdapter(BaseSportAdapter):
         # Deduplicate by player pair
         seen = set()
         matches: List[Dict[str, Any]] = []
-        for m in hudstats_live + esb_live:
+        for m in osws_live + hudstats_live + esb_live:
             key = tuple(sorted([m.get("player_a", ""), m.get("player_b", "")]))
             if key not in seen:
                 seen.add(key)
@@ -63,7 +71,15 @@ class EBasketballAdapter(BaseSportAdapter):
         return matches
 
     async def get_upcoming(self) -> List[Dict[str, Any]]:
-        """Return upcoming scheduled matches."""
+        """Return upcoming scheduled matches from OSWS first, then fallbacks."""
+        # Try OSWS first
+        try:
+            osws_matches = await osws_client.get_scheduled_matches()
+            if osws_matches:
+                return osws_matches
+        except Exception as exc:
+            log.debug("OSWS schedule fetch failed: %s", exc)
+
         try:
             matches = await hudstats_client.get_scheduled_matches()
             if matches:
