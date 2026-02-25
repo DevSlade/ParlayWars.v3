@@ -449,3 +449,472 @@ async def get_data_freshness() -> Dict[str, Any]:
         "hudstats":      last_hudstats,
         "esportsbattle": last_esb,
     }
+
+
+# ── Edge / Bookie-Beating ─────────────────────────────────────────────────────
+
+@router.get("/edge/opportunities")
+async def get_edge_opportunities() -> List[Dict[str, Any]]:
+    """
+    Return all upcoming matches with positive EV, sorted by Kelly edge score.
+
+    For each match computes: edge_pct, ev, kelly_edge, no_vig_fair_prob,
+    vig_pct, and tier flags using engines/edge.py.
+    """
+    from engines.edge import (
+        no_vig_prob, vig as compute_vig,
+        expected_value, edge_pct as compute_edge_pct,
+        kelly_edge_score,
+    )
+    from sim.odds_estimator import estimate_odds
+
+    try:
+        upcoming = await get_matches_async(status="upcoming")
+    except Exception:
+        upcoming = []
+
+    results: List[Dict[str, Any]] = []
+    for match in upcoming[:50]:
+        player_a = match.get("player_a", "")
+        player_b = match.get("player_b", "")
+        if not player_a or not player_b:
+            continue
+        try:
+            # Get model probability from latest prediction for this match
+            preds = await get_predictions_async(limit=500)
+            match_preds = [
+                p for p in preds
+                if p.get("match_id") == match.get("id") and p.get("engine_name") == "ORACLE"
+            ]
+            if match_preds:
+                prob_a = float(match_preds[0].get("prob_a") or 0.5)
+                confidence = float(match_preds[0].get("confidence") or 0.5)
+                tier = match_preds[0].get("tier", "LEAN")
+            else:
+                prob_a = 0.5
+                confidence = 0.5
+                tier = "LEAN"
+
+            # Estimate bookie odds from model probability
+            _, dec_a, _, dec_b = estimate_odds(prob_a)
+            fair_a, fair_b = no_vig_prob(dec_a, dec_b)
+            vig_val = compute_vig(dec_a, dec_b)
+            our_edge = compute_edge_pct(prob_a, fair_a)
+            ev = expected_value(prob_a, dec_a, stake=10.0)
+            k_edge = kelly_edge_score(prob_a, dec_a)
+
+            if ev <= 0:
+                continue  # only positive-EV opportunities
+
+            results.append({
+                "match_id": match.get("id"),
+                "player_a": player_a,
+                "player_b": player_b,
+                "prob_a": round(prob_a, 4),
+                "fair_prob_a": round(fair_a, 4),
+                "fair_prob_b": round(fair_b, 4),
+                "edge_pct": round(our_edge * 100.0, 2),
+                "ev_at_10": round(ev, 2),
+                "kelly_edge": round(k_edge, 4),
+                "vig_pct": round(vig_val * 100.0, 2),
+                "confidence": confidence,
+                "tier": tier,
+                "decimal_a": round(dec_a, 3),
+                "decimal_b": round(dec_b, 3),
+                "scheduled_at": match.get("scheduled_at") or match.get("match_time"),
+            })
+        except Exception as exc:
+            log.warning("Edge calc failed for match %s: %s", match.get("id"), exc)
+
+    results.sort(key=lambda x: -x["kelly_edge"])
+    return results
+
+
+@router.get("/edge/clv")
+async def get_clv_stats() -> Dict[str, Any]:
+    """
+    CLV tracking: percentage of bets that beat the closing line, average CLV.
+
+    Reads settled bets with opening_odds_decimal and closing_odds_decimal fields.
+    """
+    from engines.edge import clv_result
+
+    try:
+        bets = await get_bets_async(status="won") + await get_bets_async(status="lost")
+    except Exception:
+        bets = []
+
+    clv_values: List[float] = []
+    beat_count = 0
+    for bet in bets:
+        opening = bet.get("opening_odds_decimal") or bet.get("odds_decimal")
+        closing = bet.get("closing_odds_decimal")
+        if not opening or not closing:
+            continue
+        try:
+            our_implied = 1.0 / float(opening)
+            clv = clv_result(our_implied, float(closing))
+            clv_values.append(clv)
+            if clv > 0:
+                beat_count += 1
+        except Exception:
+            continue
+
+    n = len(clv_values)
+    return {
+        "clv_rate": round(beat_count / n, 4) if n > 0 else 0.0,
+        "avg_clv": round(sum(clv_values) / n, 4) if n > 0 else 0.0,
+        "total_bets_with_clv": n,
+    }
+
+
+@router.get("/edge/odds-history/{match_id}")
+async def get_odds_history(match_id: int) -> List[Dict[str, Any]]:
+    """
+    Return the full odds movement timeline for a match from cache.
+
+    Returns an empty list if no odds history is stored.
+    """
+    from core.cache import cache
+    history = cache.get(f"odds_history:{match_id}")
+    if not history or not isinstance(history, list):
+        return []
+    return history
+
+
+# ── Console Command Processor ─────────────────────────────────────────────────
+
+@router.post("/console/command")
+async def run_console_command(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Execute a console command string and return a formatted result.
+
+    Supported commands:
+      predict A vs B  — run all engines for player A vs B
+      status          — overall system status
+      bankroll        — current bankroll summary
+      retrain [eng]   — retrain all or a specific engine
+      accuracy        — overall engine accuracy
+      upcoming        — next 10 upcoming matches
+      player NAME     — player profile
+      h2h A B         — H2H head-to-head stats
+      bets [today]    — recent bet log
+      edge            — top edge opportunities
+      calibration     — model calibration status
+      pause sim       — pause auto-betting
+      resume sim      — resume auto-betting
+      config set K V  — update a config key
+      export          — export all data
+    """
+    cmd = str(payload.get("command", "")).strip().lower()
+    if not cmd:
+        return {"output": "No command provided. Type 'help' for a list.", "color": "yellow"}
+
+    try:
+        # ── predict A vs B ────────────────────────────────────────────
+        if cmd.startswith("predict ") and " vs " in cmd:
+            parts = cmd[len("predict "):].split(" vs ", 1)
+            pa, pb = parts[0].strip().upper(), parts[1].strip().upper()
+            from engines.titan import titan_engine
+            from engines.phantom import phantom_engine
+            from engines.surge import surge_engine
+            from engines.oracle import oracle_engine
+            lines = [f"🤖 Predicting: {pa} vs {pb}", "─" * 40]
+            for engine in [titan_engine, phantom_engine, surge_engine, oracle_engine]:
+                try:
+                    prob_a, prob_b = engine.predict(pa, pb)
+                    conf = max(prob_a, prob_b)
+                    tier = engine.confidence_tier(conf)
+                    winner = pa if prob_a >= prob_b else pb
+                    lines.append(
+                        f"  {engine.name:<8} → {winner:<12}  {prob_a*100:.1f}% / {prob_b*100:.1f}%  [{tier}]"
+                    )
+                except Exception as e:
+                    lines.append(f"  {engine.name:<8} → ERROR: {e}")
+            return {"output": "\n".join(lines), "color": "white"}
+
+        # ── status ────────────────────────────────────────────────────
+        if cmd == "status":
+            from sim.bankroll import bankroll_manager
+            from sim.tracker import tracker
+            s = tracker.summary(bankroll_manager.starting_balance)
+            lines = [
+                "✅ ParlayWars v3 — ONLINE",
+                f"   Bankroll:    ${bankroll_manager.balance:.2f}",
+                f"   ROI:         {s['roi_pct']:.2f}%",
+                f"   Win Rate:    {s['win_rate']*100:.1f}%",
+                f"   Total Bets:  {s['total_bets']}",
+                f"   Streak:      {s['current_streak']}",
+                f"   Recovery:    {'YES ⚠️' if bankroll_manager.is_in_recovery_mode() else 'No'}",
+            ]
+            return {"output": "\n".join(lines), "color": "green"}
+
+        # ── bankroll ──────────────────────────────────────────────────
+        if cmd == "bankroll":
+            from sim.bankroll import bankroll_manager
+            from sim.tracker import tracker
+            proj = tracker.compound_growth_projection(
+                bankroll_manager.starting_balance,
+                bankroll_manager.balance,
+                days_elapsed=30,
+            )
+            lines = [
+                f"💰 Bankroll: ${bankroll_manager.balance:.2f}",
+                f"   Starting:      ${bankroll_manager.starting_balance:.2f}",
+                f"   ROI:           {bankroll_manager.roi():.2f}%",
+                f"   Daily ROI est: {proj['daily_roi_pct']:.3f}%",
+                f"   30d Projection: ${proj['projection_30d']:.2f}",
+                f"   90d Projection: ${proj['projection_90d']:.2f}",
+                f"   CAGR est:       {proj['cagr_pct']:.1f}%",
+            ]
+            return {"output": "\n".join(lines), "color": "green"}
+
+        # ── retrain ───────────────────────────────────────────────────
+        if cmd.startswith("retrain"):
+            target = cmd[len("retrain"):].strip()
+            from core.database import get_all_players_async
+            players = await get_all_players_async()
+            from engines.titan import titan_engine
+            from engines.phantom import phantom_engine
+            from engines.surge import surge_engine
+            import asyncio as _asyncio
+            loop = _asyncio.get_event_loop()
+            engines_to_train = []
+            if not target or target == "all":
+                engines_to_train = [titan_engine, phantom_engine, surge_engine]
+            elif target == "titan":
+                engines_to_train = [titan_engine]
+            elif target == "phantom":
+                engines_to_train = [phantom_engine]
+            elif target == "surge":
+                engines_to_train = [surge_engine]
+            trained = []
+            for eng in engines_to_train:
+                await loop.run_in_executor(None, eng.train_on_players, players)
+                trained.append(eng.name)
+            return {
+                "output": f"✅ Retrained: {', '.join(trained)} on {len(players)} players.",
+                "color": "green",
+            }
+
+        # ── accuracy ──────────────────────────────────────────────────
+        if cmd == "accuracy":
+            from sim.tracker import tracker
+            tiers = tracker.accuracy_by_tier()
+            breakdown = tracker.engine_breakdown()
+            lines = ["📊 Accuracy by Tier:"]
+            for tier, d in tiers.items():
+                lines.append(f"  {tier:<8} {d['hit_rate']}%  ({d['wins']}/{d['bets']} bets)")
+            lines.append("📊 Engine Breakdown:")
+            for eng, d in breakdown.items():
+                lines.append(f"  {eng:<8} WR={d['win_rate']*100:.1f}%  P/L=${d['pl']:.2f}")
+            return {"output": "\n".join(lines), "color": "white"}
+
+        # ── upcoming ──────────────────────────────────────────────────
+        if cmd == "upcoming":
+            matches = await get_matches_async(status="upcoming")
+            lines = ["📅 Upcoming Matches (next 10):"]
+            for m in matches[:10]:
+                lines.append(
+                    f"  {m.get('player_a','?'):>12} vs {m.get('player_b','?'):<12}  "
+                    f"{(m.get('scheduled_at') or m.get('match_time') or '?')[:16]}"
+                )
+            if not matches:
+                lines.append("  No upcoming matches found.")
+            return {"output": "\n".join(lines), "color": "white"}
+
+        # ── player NAME ───────────────────────────────────────────────
+        if cmd.startswith("player "):
+            name = cmd[len("player "):].strip().upper()
+            player = await get_player_async(name)
+            if not player:
+                return {"output": f"Player '{name}' not found.", "color": "red"}
+            lines = [
+                f"👤 {player['name']}",
+                f"   ELO:    {player.get('elo', 1500):.0f}",
+                f"   PWR:    {player.get('pwr_rating', 50):.1f}",
+                f"   Win%:   {player.get('win_pct', 50):.1f}%",
+                f"   Recent: {player.get('recent_win_pct', 50):.1f}%",
+                f"   Games:  {player.get('total_games', 0)}",
+                f"   Form:   {''.join(player.get('form', [])[:10])}",
+            ]
+            return {"output": "\n".join(lines), "color": "white"}
+
+        # ── h2h A B ───────────────────────────────────────────────────
+        if cmd.startswith("h2h "):
+            parts = cmd[4:].strip().split()
+            if len(parts) >= 2:
+                pa, pb = parts[0].upper(), parts[1].upper()
+                h2h = await get_h2h_async(pa, pb)
+                rec = h2h.get("h2h", {}) if h2h else {}
+                lines = [
+                    f"⚔️  {pa} vs {pb}",
+                    f"   H2H Record: {rec.get('a_wins',0)}-{rec.get('b_wins',0)} ({rec.get('total',0)} games)",
+                    f"   Avg Margin: {rec.get('avg_margin',0):.1f} pts",
+                ]
+                return {"output": "\n".join(lines), "color": "white"}
+
+        # ── bets ──────────────────────────────────────────────────────
+        if cmd.startswith("bets"):
+            bets = await get_bets_async(limit=10)
+            lines = ["📋 Recent Bets:"]
+            for b in bets:
+                pl = b.get("profit_loss")
+                pl_str = f"${pl:+.2f}" if pl is not None else "pending"
+                lines.append(
+                    f"  {b.get('placed_at','?')[:16]}  {b.get('predicted_winner','?'):<12}"
+                    f"  ${b.get('stake',0):.2f}  {b.get('status','?'):<8}  {pl_str}"
+                )
+            if not bets:
+                lines.append("  No bets found.")
+            return {"output": "\n".join(lines), "color": "white"}
+
+        # ── edge ──────────────────────────────────────────────────────
+        if cmd == "edge":
+            opps = await get_edge_opportunities()
+            lines = [f"💡 Top Edge Opportunities ({len(opps)} total):"]
+            for opp in opps[:5]:
+                lines.append(
+                    f"  {opp['player_a']:>12} vs {opp['player_b']:<12}  "
+                    f"edge={opp['edge_pct']:.1f}%  EV=${opp['ev_at_10']:.2f}  [{opp['tier']}]"
+                )
+            if not opps:
+                lines.append("  No positive-EV opportunities right now.")
+            return {"output": "\n".join(lines), "color": "green"}
+
+        # ── calibration ───────────────────────────────────────────────
+        if cmd == "calibration":
+            cal = await get_calibration_status()
+            lines = ["🔬 Calibration Status:"]
+            for eng_name, eng_data in cal.get("engines", {}).items():
+                lines.append(
+                    f"  {eng_name:<8} brier={eng_data.get('brier',0):.4f}  "
+                    f"acc={eng_data.get('rolling_acc',0)*100:.1f}%  {eng_data.get('status','?')}"
+                )
+            return {"output": "\n".join(lines), "color": "white"}
+
+        # ── pause sim ────────────────────────────────────────────────
+        if cmd == "pause sim":
+            from sim.bankroll import bankroll_manager
+            bankroll_manager._betting_paused = True
+            return {"output": "⏸️  Auto-betting PAUSED.", "color": "yellow"}
+
+        # ── resume sim ───────────────────────────────────────────────
+        if cmd == "resume sim":
+            from sim.bankroll import bankroll_manager
+            bankroll_manager._betting_paused = False
+            return {"output": "▶️  Auto-betting RESUMED.", "color": "green"}
+
+        # ── config set K V ───────────────────────────────────────────
+        if cmd.startswith("config set "):
+            parts = cmd[len("config set "):].strip().split(None, 1)
+            if len(parts) == 2:
+                key, value = parts
+                cfg.set(key, value)
+                return {"output": f"✅ Config updated: {key} = {value}", "color": "green"}
+            return {"output": "Usage: config set <key> <value>", "color": "yellow"}
+
+        # ── export ────────────────────────────────────────────────────
+        if cmd == "export":
+            try:
+                from scripts.export_data import export_all
+                export_all()
+                return {"output": "✅ Data exported to data/exports/", "color": "green"}
+            except Exception as e:
+                return {"output": f"Export failed: {e}", "color": "red"}
+
+        # ── unknown command ───────────────────────────────────────────
+        return {
+            "output": (
+                f"Unknown command: '{cmd}'\n"
+                "Available: predict A vs B, status, bankroll, retrain, accuracy, "
+                "upcoming, player NAME, h2h A B, bets, edge, calibration, "
+                "pause sim, resume sim, config set K V, export"
+            ),
+            "color": "yellow",
+        }
+
+    except Exception as exc:
+        log.error("Console command failed '%s': %s", cmd, exc)
+        return {"output": f"❌ Error: {exc}", "color": "red"}
+
+
+# ── Calibration Status ────────────────────────────────────────────────────────
+
+@router.get("/calibration")
+async def get_calibration_status() -> Dict[str, Any]:
+    """
+    Return current model calibration status for all engines.
+
+    Computes Brier score, rolling accuracy, and calibration status
+    (GOOD / DRIFTING / NEEDS_RETRAIN) for each engine using settled predictions.
+    """
+    from engines.calibration import (
+        brier_score as compute_brier,
+        rolling_accuracy,
+        calibration_status,
+        is_degraded,
+    )
+    from core.database import get_async_conn
+
+    engine_results: Dict[str, Any] = {}
+
+    try:
+        async with get_async_conn() as conn:
+            cursor = await conn.execute(
+                """
+                SELECT p.engine_name, p.prob_a, p.predicted_winner,
+                       m.winner AS actual_winner
+                FROM predictions p
+                JOIN matches m ON p.match_id = m.id
+                WHERE m.status = 'completed' AND m.winner IS NOT NULL
+                ORDER BY p.id DESC
+                LIMIT 500
+                """,
+            )
+            rows = await cursor.fetchall()
+
+        # Group predictions by engine
+        engine_preds: Dict[str, list] = {}
+        for row in rows:
+            eng = (row["engine_name"] if hasattr(row, "__getitem__") else row[0]) or "UNKNOWN"
+            try:
+                prob_a = float(row["prob_a"] if hasattr(row, "__getitem__") else row[1] or 0.5)
+                predicted = (row["predicted_winner"] if hasattr(row, "__getitem__") else row[2]) or ""
+                actual = (row["actual_winner"] if hasattr(row, "__getitem__") else row[3]) or ""
+            except Exception:
+                continue
+            outcome = 1 if predicted == actual else 0
+            confidence = max(prob_a, 1.0 - prob_a)
+            if eng not in engine_preds:
+                engine_preds[eng] = []
+            engine_preds[eng].append((confidence, outcome))
+
+        for eng, preds in engine_preds.items():
+            if not preds:
+                continue
+            b_score = compute_brier(preds)
+            r_acc = rolling_accuracy(preds, window=50)
+            status = calibration_status(b_score, 0.25)
+            engine_results[eng] = {
+                "brier": round(b_score, 4),
+                "rolling_acc": round(r_acc, 4),
+                "status": status,
+                "degraded": is_degraded(r_acc),
+                "sample_size": len(preds),
+            }
+
+    except Exception as exc:
+        log.error("Calibration status query failed: %s", exc)
+
+    overall = "GOOD"
+    if any(v.get("status") == "NEEDS_RETRAIN" for v in engine_results.values()):
+        overall = "NEEDS_RETRAIN"
+    elif any(v.get("status") == "DRIFTING" for v in engine_results.values()):
+        overall = "DRIFTING"
+
+    return {
+        "engines": engine_results,
+        "overall_status": overall,
+        "engines_checked": len(engine_results),
+    }

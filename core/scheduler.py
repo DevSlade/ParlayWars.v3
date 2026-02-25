@@ -216,6 +216,71 @@ async def _daily_snapshot() -> None:
         log.error("Daily snapshot failed: %s", exc)
 
 
+async def _run_calibration() -> None:
+    """
+    Daily calibration: compute Brier score per engine, detect degraded engines,
+    and trigger retrain if performance has deteriorated significantly.
+    """
+    try:
+        from engines.calibration import brier_score, calibration_status, rolling_accuracy, is_degraded
+        from core.database import get_async_conn
+
+        log.info("Running daily model calibration...")
+        async with get_async_conn() as conn:
+            # Fetch settled predictions with their actual outcomes
+            cursor = await conn.execute(
+                """
+                SELECT p.engine_name, p.prob_a, p.predicted_winner,
+                       m.winner AS actual_winner
+                FROM predictions p
+                JOIN matches m ON p.match_id = m.id
+                WHERE m.status = 'completed' AND m.winner IS NOT NULL
+                ORDER BY p.id DESC
+                LIMIT 500
+                """,
+            )
+            rows = await cursor.fetchall()
+
+        # Group predictions by engine
+        engine_preds: Dict[str, list] = {}
+        for row in rows:
+            eng = row["engine_name"] or "UNKNOWN"
+            prob_a = float(row["prob_a"] or 0.5)
+            predicted = row["predicted_winner"] or ""
+            actual = row["actual_winner"] or ""
+            # Outcome: 1 if prediction was correct, 0 if not
+            outcome = 1 if predicted == actual else 0
+            # Use the probability of the predicted side
+            confidence = prob_a if predicted == (row.get("player_a") or predicted) else 1.0 - prob_a
+            if eng not in engine_preds:
+                engine_preds[eng] = []
+            engine_preds[eng].append((confidence, outcome))
+
+        degraded_engines = []
+        for eng, preds in engine_preds.items():
+            if not preds:
+                continue
+            b_score = brier_score(preds)
+            r_acc = rolling_accuracy(preds, window=50)
+            degraded = is_degraded(r_acc)
+            status = calibration_status(b_score, 0.25)  # compare vs baseline 0.25
+            log.info(
+                "Calibration [%s]: brier=%.4f, rolling_acc=%.1f%%, status=%s, degraded=%s",
+                eng, b_score, r_acc * 100, status, degraded,
+            )
+            if status == "NEEDS_RETRAIN" or degraded:
+                degraded_engines.append(eng)
+
+        if degraded_engines:
+            log.warning("Degraded engines detected: %s — triggering retrain", degraded_engines)
+            await _trigger_retrain()
+        else:
+            log.info("All engines within calibration thresholds.")
+
+    except Exception as exc:
+        log.error("Calibration job failed: %s", exc)
+
+
 def create_scheduler() -> AsyncIOScheduler:
     """Create and return the configured APScheduler instance."""
     sched_cfg = cfg.get("scheduler", default={})
@@ -248,6 +313,14 @@ def create_scheduler() -> AsyncIOScheduler:
         trigger=CronTrigger(hour=snapshot_hour, minute=0),
         id="daily_snapshot",
         name="Daily ELO/PWR Snapshot",
+        max_instances=1,
+    )
+
+    scheduler.add_job(
+        _run_calibration,
+        trigger=CronTrigger(hour=4, minute=30),
+        id="calibration",
+        name="Model Auto-Calibration",
         max_instances=1,
     )
 

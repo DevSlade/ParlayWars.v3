@@ -35,6 +35,8 @@ class PerformanceTracker:
         timestamp: str,
         engine: str,
         confidence: float,
+        grade: str = "",
+        tier: str = "",
     ) -> None:
         """Record a settled bet."""
         self._bets.append({
@@ -45,6 +47,8 @@ class PerformanceTracker:
             "timestamp": timestamp,
             "engine": engine,
             "confidence": confidence,
+            "grade": grade,
+            "tier": tier,
         })
 
     def record_balance(self, timestamp: str, balance: float) -> None:
@@ -191,6 +195,8 @@ class PerformanceTracker:
                 "hit_rate": round(data["wins"] / n * 100.0, 1) if n > 0 else 0.0,
             }
         return result
+
+    def engine_breakdown(self) -> Dict[str, Dict[str, Any]]:
         """P/L and win rate broken down by engine."""
         engines: Dict[str, Dict] = {}
         for bet in self._bets:
@@ -211,6 +217,63 @@ class PerformanceTracker:
                 "pl": round(data["pl"], 2),
             }
         return result
+
+    def compound_growth_projection(
+        self,
+        starting_bankroll: float,
+        current_bankroll: float,
+        days_elapsed: int,
+    ) -> Dict[str, Any]:
+        """
+        Project future bankroll growth assuming current daily ROI continues.
+
+        Computes the daily ROI using compound growth formula:
+          daily_roi = (current / starting) ^ (1 / max(days, 1)) - 1
+
+        Then projects 30, 60, 90 days forward and annualises the rate.
+
+        Args:
+            starting_bankroll: Bankroll at the start of the tracking period.
+            current_bankroll:  Current bankroll value.
+            days_elapsed:      Number of calendar days in the tracking period.
+
+        Returns:
+            Dict with keys: daily_roi_pct, projection_30d, projection_60d,
+            projection_90d, cagr_pct.
+        """
+        if starting_bankroll <= 0 or current_bankroll <= 0:
+            return {
+                "daily_roi_pct": 0.0,
+                "projection_30d": current_bankroll,
+                "projection_60d": current_bankroll,
+                "projection_90d": current_bankroll,
+                "cagr_pct": 0.0,
+            }
+        d = max(days_elapsed, 1)
+        daily_roi = (current_bankroll / starting_bankroll) ** (1.0 / d) - 1.0
+        return {
+            "daily_roi_pct": round(daily_roi * 100.0, 4),
+            "projection_30d": round(current_bankroll * (1.0 + daily_roi) ** 30, 2),
+            "projection_60d": round(current_bankroll * (1.0 + daily_roi) ** 60, 2),
+            "projection_90d": round(current_bankroll * (1.0 + daily_roi) ** 90, 2),
+            "cagr_pct": round(daily_roi * 365.0 * 100.0, 2),
+        }
+
+    def bet_grade_distribution(self) -> Dict[str, int]:
+        """
+        Count settled bets by grade (A+, A, B, C, F).
+
+        Grades are stored on bets by AutoBettor.settle_match() via grade_bet().
+
+        Returns:
+            Dict mapping grade string to count.
+        """
+        dist: Dict[str, int] = {"A+": 0, "A": 0, "B": 0, "C": 0, "F": 0}
+        for bet in self._bets:
+            g = bet.get("grade", "")
+            if g in dist:
+                dist[g] += 1
+        return dist
 
 
 # Module-level singleton

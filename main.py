@@ -58,17 +58,47 @@ def main() -> None:
     log_level = cfg.get("server", "log_level", default="info")
     reload = not args.no_reload and cfg.get("server", "reload", default=False)
 
+    # ── Dynamic ASCII banner ─────────────────────────────────────────────────
+    player_count = 0
+    match_count = 0
+    bankroll_val = 0.0
+    try:
+        from core.database import get_player_count_sync, get_match_count_sync
+        player_count = get_player_count_sync()
+        match_count = get_match_count_sync()
+    except Exception:
+        pass
+    try:
+        from sim.bankroll import bankroll_manager
+        bankroll_val = bankroll_manager.balance
+    except Exception:
+        pass
+
+    try:
+        import sqlite3
+        from core.config import cfg as _cfg
+        _db_path = _cfg.get("database", "path", default="data/parlayWars.db")
+        _conn = sqlite3.connect(_db_path)
+        _cur = _conn.execute("SELECT COUNT(*) FROM players")
+        player_count = _cur.fetchone()[0]
+        _cur2 = _conn.execute("SELECT COUNT(*) FROM matches")
+        match_count = _cur2.fetchone()[0]
+        _conn.close()
+    except Exception:
+        pass
+
+    sim_status = "RUNNING"
     print(f"""
-╔═══════════════════════════════════════════════════════╗
-║          ParlayWars v3 — Starting Up                  ║
-║  2K eBasketball AI Prediction & Paper Trading         ║
-╠═══════════════════════════════════════════════════════╣
-║  URL:  http://{host}:{port:<38} ║
-║  Date: 2026-02-25                                     ║
-╠═══════════════════════════════════════════════════════╣
-║  Cloudflare Tunnel (remote access):                   ║
-║  cloudflared tunnel --url http://localhost:{port:<6}  ║
-╚═══════════════════════════════════════════════════════╝
+╔══════════════════════════════════════════════════════════╗
+║           PARLAY WARS v3.0 — ONLINE                     ║
+║       2K eBasketball AI Prediction Engine               ║
+╠══════════════════════════════════════════════════════════╣
+║  Engines:  TITAN ✅  PHANTOM ✅  SURGE ✅  ORACLE ✅      ║
+║  APIs:     HudStats ✅  ESportsBattle ✅  Odds ✅         ║
+║  Sim:      {sim_status:<8} |  Bankroll: ${bankroll_val:<20.2f}  ║
+║  Players:  {player_count:<6} loaded  |  Matches: {match_count:<17,}  ║
+║  Server:   http://localhost:{port:<30}  ║
+╚══════════════════════════════════════════════════════════╝
     """)
 
     uvicorn.run(

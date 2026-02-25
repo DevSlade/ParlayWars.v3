@@ -461,6 +461,27 @@ function renderPredictions() {
 }
 
 // ── Render Console tab ─────────────────────────────────────────────────────
+
+/** Autocomplete suggestions for the console command bar. */
+const _CONSOLE_SUGGESTIONS = [
+  'predict [A] vs [B]',
+  'status',
+  'bankroll',
+  'retrain',
+  'retrain titan',
+  'retrain phantom',
+  'retrain surge',
+  'accuracy',
+  'upcoming',
+  'player [name]',
+  'h2h [A] [B]',
+  'bets today',
+  'edge',
+  'calibration',
+  'pause sim',
+  'resume sim',
+];
+
 function renderConsole() {
   const root = document.getElementById('console-root');
   if (!root) return;
@@ -477,9 +498,114 @@ function renderConsole() {
         <button class="btn btn-secondary btn-sm" onclick="clearConsole()">Clear</button>
       </div>
     </div>
-    <div class="card console-log-box" id="console-log" style="font-family:monospace;font-size:12px;min-height:400px;overflow-y:auto;max-height:70vh;padding:12px;line-height:1.6"></div>
+
+    <!-- Command input bar -->
+    <div class="card" style="margin-bottom:var(--gap);position:relative">
+      <div style="display:flex;gap:8px">
+        <div style="flex:1;position:relative">
+          <input id="console-cmd" type="text"
+            placeholder="Type a command... (predict TAAPZ vs LANES, status, bankroll, retrain, accuracy, upcoming, edge)"
+            style="width:100%;font-family:monospace;font-size:13px"
+            oninput="_showConsoleSuggestions(this.value)"
+            onkeydown="if(event.key==='Enter'){_runConsoleCommand();_hideSuggestions();}if(event.key==='Escape')_hideSuggestions();"
+          />
+          <div id="console-suggestions" style="display:none;position:absolute;left:0;right:0;top:100%;
+            background:var(--bg-card);border:1px solid var(--border-color);border-radius:0 0 var(--radius) var(--radius);
+            z-index:100;max-height:200px;overflow-y:auto"></div>
+        </div>
+        <button class="btn btn-primary" onclick="_runConsoleCommand()" style="white-space:nowrap">▶ Run</button>
+      </div>
+    </div>
+
+    <div class="card console-log-box" id="console-log" style="font-family:monospace;font-size:12px;min-height:400px;overflow-y:auto;max-height:65vh;padding:12px;line-height:1.6"></div>
   `;
   apiGet('/api/stats').then(() => {}).catch(() => {});
+}
+
+/**
+ * Show autocomplete dropdown matching the current input.
+ * @param {string} val - Current input value
+ */
+function _showConsoleSuggestions(val) {
+  const box = document.getElementById('console-suggestions');
+  if (!box) return;
+  const q = val.toLowerCase().trim();
+  if (!q) { box.style.display = 'none'; return; }
+  const matches = _CONSOLE_SUGGESTIONS.filter(s => s.toLowerCase().startsWith(q) && s !== q);
+  if (!matches.length) { box.style.display = 'none'; return; }
+  box.style.display = 'block';
+  box.innerHTML = matches.map(s => `
+    <div onclick="_selectSuggestion('${s}')"
+      style="padding:6px 12px;cursor:pointer;border-bottom:1px solid var(--border-color);
+             font-family:monospace;font-size:12px"
+      onmouseenter="this.style.background='var(--bg-hover)'"
+      onmouseleave="this.style.background=''">${s}</div>
+  `).join('');
+}
+
+/**
+ * Fill the command input with the selected suggestion.
+ * @param {string} suggestion
+ */
+function _selectSuggestion(suggestion) {
+  const inp = document.getElementById('console-cmd');
+  if (inp) inp.value = suggestion;
+  _hideSuggestions();
+  inp && inp.focus();
+}
+
+/** Hide the suggestions dropdown. */
+function _hideSuggestions() {
+  const box = document.getElementById('console-suggestions');
+  if (box) box.style.display = 'none';
+}
+
+/** Execute the current console command and append result to the log. */
+async function _runConsoleCommand() {
+  const inp = document.getElementById('console-cmd');
+  if (!inp) return;
+  const cmd = inp.value.trim();
+  if (!cmd) return;
+  inp.value = '';
+  _hideSuggestions();
+
+  // Echo the command
+  _appendConsoleOutput(`> ${cmd}`, '#8892b0');
+
+  try {
+    const result = await apiPost('/api/console/command', { command: cmd });
+    const colorMap = {
+      green: 'var(--win-color)',
+      red:   'var(--loss-color)',
+      yellow: '#f59e0b',
+      white:  'var(--text-primary)',
+    };
+    const color = colorMap[result.color] || 'var(--text-primary)';
+    _appendConsoleOutput(result.output || '(no output)', color);
+  } catch (err) {
+    _appendConsoleOutput(`❌ ${err.message}`, 'var(--loss-color)');
+  }
+}
+
+/**
+ * Append a line (or multiline block) to the console log.
+ * @param {string} text
+ * @param {string} color - CSS color string
+ */
+function _appendConsoleOutput(text, color) {
+  const box = document.getElementById('console-log');
+  if (!box) return;
+  const div = document.createElement('div');
+  div.style.color = color;
+  div.style.marginBottom = '2px';
+  div.style.whiteSpace = 'pre-wrap';
+  div.textContent = text;
+  box.appendChild(div);
+  // Add blank line separator
+  const sep = document.createElement('div');
+  sep.style.height = '4px';
+  box.appendChild(sep);
+  box.scrollTop = box.scrollHeight;
 }
 
 let _consoleLogs = [];

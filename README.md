@@ -9,13 +9,46 @@ A full-stack web platform for predicting 2K eBasketball match outcomes using mul
 
 ```bash
 pip install -r requirements.txt
-python main.py --seed    # seed database from TSV
 python main.py           # start server on :8000
 open http://localhost:8000
 ```
 
 ### Remote Access via Cloudflare Tunnel
 ```bash
+cloudflared tunnel --url http://localhost:8000
+```
+
+---
+
+## Remote Access via Cloudflare Tunnel
+
+Access ParlayWars from any device (phone, tablet, another computer) without port forwarding.
+
+### Option 1: Quick (no account needed)
+```bash
+# Install cloudflared
+brew install cloudflare/cloudflare/cloudflared   # macOS
+# or: curl -L https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -o cloudflared && chmod +x cloudflared
+
+# Start tunnel (generates a random URL)
+cloudflared tunnel --url http://localhost:8000
+# Outputs: https://random-name.trycloudflare.com
+```
+
+### Option 2: Named tunnel (persistent URL)
+```bash
+cloudflared tunnel login
+cloudflared tunnel create parlaywars
+cloudflared tunnel route dns parlaywars yourdomain.com
+cloudflared tunnel run parlaywars
+```
+
+### Running both server and tunnel together
+```bash
+# Terminal 1
+python main.py
+
+# Terminal 2
 cloudflared tunnel --url http://localhost:8000
 ```
 
@@ -56,8 +89,7 @@ ParlayWars.v3/
 ├── engines/                   # TITAN, PHANTOM, SURGE, ORACLE, features, ELO
 ├── sports/ebasketball/        # HudStats, ESportsBattle, Odds API clients
 ├── sim/                       # Bankroll, bettor, parlay, tracker
-├── server/                    # FastAPI app, REST API, WebSocket, SPA
-└── data/seed/players_seed.tsv # 166-player seed data
+└── server/                    # FastAPI app, REST API, WebSocket, SPA
 ```
 
 ---

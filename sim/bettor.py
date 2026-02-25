@@ -18,6 +18,7 @@ from core.database import (
     settle_bet_async,
 )
 from core.logger import get_logger
+from engines.edge import grade_bet, expected_value, kelly_edge_score, edge_based_unit_size, no_vig_prob
 from sim.bankroll import bankroll_manager
 from sim.odds_estimator import estimate_odds, prob_to_decimal
 from sim.parlay import parlay_builder
@@ -69,9 +70,18 @@ class AutoBettor:
             decimal_odds = decimal_b
 
         # Compute Kelly stake
-        stake = bankroll_manager.kelly_stake(win_prob, decimal_odds)
+        stake = bankroll_manager.kelly_stake(win_prob, decimal_odds, confidence=confidence)
         if stake <= 0:
             return None
+
+        # Compute EV; skip if negative and not in recovery mode
+        ev = expected_value(win_prob, decimal_odds, stake)
+        if ev <= 0 and not bankroll_manager.is_in_recovery_mode():
+            log.debug("Negative EV (%.4f) — skipping bet on %s", ev, predicted_winner)
+            return None
+
+        # Kelly edge score for record-keeping
+        k_edge = kelly_edge_score(win_prob, decimal_odds)
 
         # Ensure we have enough bankroll
         if stake > bankroll_manager.balance:
@@ -90,6 +100,8 @@ class AutoBettor:
             "confidence": confidence,
             "tier": tier,
             "status": "pending",
+            "ev": ev,
+            "kelly_edge": k_edge,
         })
 
         # Log bankroll change (stake is reserved but not deducted until settlement)
@@ -127,6 +139,14 @@ class AutoBettor:
             else:
                 profit_loss = bankroll_manager.apply_loss(stake)
 
+            # Grade the bet and run risk controls
+            ev = float(bet.get("ev") or 0.0)
+            bet_confidence = float(bet.get("confidence") or 0.5)
+            bet_grade = grade_bet(won, ev=ev, confidence=bet_confidence)
+            risk_status = bankroll_manager.check_risk_controls()
+            if risk_status != "OK":
+                log.info("Risk control triggered after bet %d settlement: %s", bet["id"], risk_status)
+
             await settle_bet_async(bet["id"], actual_winner, profit_loss)
             await log_bankroll_async(
                 balance=bankroll_manager.balance,
@@ -143,6 +163,7 @@ class AutoBettor:
                 timestamp=datetime.now(tz=timezone.utc).isoformat(),
                 engine=bet.get("engine_used") or "UNKNOWN",
                 confidence=float(bet.get("confidence") or 0.5),
+                grade=bet_grade,
             )
             tracker.record_balance(
                 datetime.now(tz=timezone.utc).isoformat(),

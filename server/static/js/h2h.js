@@ -135,6 +135,27 @@ async function loadH2H() {
           </div>
         ` : ''}
       </div>
+
+      <!-- Parlay Correlation Warning -->
+      <div class="card" style="margin-top:var(--gap);border:1px solid rgba(245,158,11,0.5);background:rgba(245,158,11,0.07)">
+        <div style="display:flex;align-items:flex-start;gap:10px">
+          <span style="font-size:20px">⚠️</span>
+          <div>
+            <div style="font-weight:700;color:#f59e0b;margin-bottom:4px">PARLAY CORRELATION WARNING</div>
+            <div style="font-size:13px;color:var(--text-secondary)">
+              These players may share match pools or tournament structures.
+              Adding both <strong>${pa}</strong> and <strong>${pb}</strong> to a parlay introduces
+              <em>hidden correlation risk</em> — if one loses due to a shared opponent or bracket
+              outcome, the other is more likely to lose too.
+            </div>
+            <div style="font-size:12px;color:var(--text-muted);margin-top:8px">
+              💡 Recommendation: Treat correlated legs as a <strong>single bet unit</strong>
+              rather than stacking them for a larger parlay payout.
+              Correlation is match-dependent — verify bracket assignments before parlaying.
+            </div>
+          </div>
+        </div>
+      </div>
     `;
   } catch (err) {
     results.innerHTML = `<div class="loading-overlay" style="color:var(--loss-color)">Error: ${err.message}</div>`;
