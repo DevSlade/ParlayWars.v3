@@ -67,8 +67,11 @@ async def dashboard_ws(websocket: WebSocket) -> None:
                     "summary": tracker.summary(bankroll_manager.starting_balance),
                 }
                 await websocket.send_json(payload)
+            except WebSocketDisconnect:
+                break
             except Exception as exc:
                 log.warning("Dashboard WS send error: %s", exc)
+                break
 
             # Wait 5 seconds between updates
             await asyncio.sleep(5)
@@ -108,8 +111,11 @@ async def console_ws(websocket: WebSocket) -> None:
                 last_count = len(current_logs)
                 if new_entries:
                     await websocket.send_json({"type": "log_append", "entries": new_entries})
+            except WebSocketDisconnect:
+                break
             except Exception as exc:
                 log.warning("Console WS send error: %s", exc)
+                break
 
     except WebSocketDisconnect:
         log.info("Console WebSocket disconnected.")

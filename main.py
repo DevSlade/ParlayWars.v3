@@ -74,19 +74,6 @@ def main() -> None:
     except Exception:
         pass
 
-    try:
-        import sqlite3
-        from core.config import cfg as _cfg
-        _db_path = _cfg.get("database", "path", default="data/parlayWars.db")
-        _conn = sqlite3.connect(_db_path)
-        _cur = _conn.execute("SELECT COUNT(*) FROM players")
-        player_count = _cur.fetchone()[0]
-        _cur2 = _conn.execute("SELECT COUNT(*) FROM matches")
-        match_count = _cur2.fetchone()[0]
-        _conn.close()
-    except Exception:
-        pass
-
     sim_status = "RUNNING"
     print(f"""
 ╔══════════════════════════════════════════════════════════╗

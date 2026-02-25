@@ -231,6 +231,20 @@ def upsert_player_sync(player: Dict[str, Any]) -> None:
         )
 
 
+def get_player_count_sync() -> int:
+    """Return the number of players in the database (sync)."""
+    with get_sync_conn() as conn:
+        row = conn.execute("SELECT COUNT(*) FROM players").fetchone()
+    return row[0] if row else 0
+
+
+def get_match_count_sync() -> int:
+    """Return the number of matches in the database (sync)."""
+    with get_sync_conn() as conn:
+        row = conn.execute("SELECT COUNT(*) FROM matches").fetchone()
+    return row[0] if row else 0
+
+
 def get_all_players_sync() -> List[Dict[str, Any]]:
     """Return all players as list of dicts (sync)."""
     with get_sync_conn() as conn:

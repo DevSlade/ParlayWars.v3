@@ -17,6 +17,7 @@ DEFAULTS: Dict[str, Any] = {
     "cache": {"ttl_seconds": 300, "disk_path": "data/cache"},
     "logging": {"level": "INFO", "file": "data/parlayWars.log", "ring_buffer_size": 500},
     "apis": {
+        "osws": {"base_url": "http://localhost:8001", "enabled": True},
         "hudstats": {"base_url": "https://api-h2h.hudstats.com/v1", "enabled": True},
         "esportsbattle": {"base_url": "https://basketball.esportsbattle.com/api", "enabled": True},
         "odds_api": {"base_url": "https://api.the-odds-api.com/v4", "key": "b824c5f93dc1f906c306702b7eb1f6fc", "enabled": True},

@@ -7,16 +7,69 @@ A full-stack web platform for predicting 2K eBasketball match outcomes using mul
 
 ## Quick Start
 
+### Unified startup (recommended)
+```bash
+# Linux / macOS
+bash start.sh
+
+# Windows
+start.bat
+```
+
+This will:
+1. Install all Python dependencies
+2. Bootstrap the database with 166 players
+3. Start the OSWS scraper service on port 8001
+4. Start ParlayWars on port 8000
+
+### Manual startup
 ```bash
 pip install -r requirements.txt
-python main.py           # start server on :8000
+python main.py --bootstrap          # seed database (one-time)
+python -m osws.scraper_api &        # start OSWS scraper on :8001
+python main.py                      # start server on :8000
 open http://localhost:8000
 ```
 
-### Remote Access via Cloudflare Tunnel
+### CLI flags
 ```bash
-cloudflared tunnel --url http://localhost:8000
+python main.py                      # start server
+python main.py --bootstrap          # seed database from HudStats API / CSV fallback
+python main.py --retrain            # force retrain all ML engines
+python main.py --port 8080          # custom port
+python main.py --no-reload          # production mode (no auto-reload)
 ```
+
+---
+
+## Architecture
+
+```
+┌─────────────────────┐     ┌──────────────────────┐
+│   ParlayWars v3     │────▶│   OSWS Scraper API   │
+│   FastAPI :8000     │◀────│   FastAPI :8001       │
+└─────────────────────┘     └──────────────────────┘
+         │                           │
+         ▼                           ▼
+   data/db/parlayWars.db      data/db/osws.db
+```
+
+### OSWS (Open Source Web Scraper)
+OSWS is an independent scraper service that fetches eBasketball player data from the HudStats API (`https://api-h2h.hudstats.com/v1/participant/nba`) and exposes it via a REST API on port 8001.
+
+**OSWS endpoints:**
+- `GET /health` — Health check
+- `GET /players` — All 166 players
+- `GET /players/{name}` — Single player
+- `GET /matches/live` — Live matches
+- `GET /matches/scheduled` — Upcoming matches
+- `POST /refresh?force=true` — Force data refresh
+
+### Data Sources (priority order)
+1. **OSWS** (`http://localhost:8001`) — primary for live/scheduled matches
+2. **HudStats API** (`https://api-h2h.hudstats.com/v1`) — player stats, H2H
+3. **ESportsBattle API** — fallback for match data
+4. **Embedded CSV seed** (`data/seed_players.tsv`) — offline fallback for 166 players
 
 ---
 

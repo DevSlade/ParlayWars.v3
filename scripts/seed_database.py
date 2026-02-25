@@ -279,6 +279,19 @@ async def _fetch_players() -> list:
     return players
 
 
+def _try_osws_bootstrap() -> int:
+    """
+    Try bootstrapping from the OSWS pipeline (which uses HudStats API + CSV fallback).
+    Returns number of players stored in OSWS DB, or 0 on failure.
+    """
+    try:
+        from osws.h2h_pipeline import run_pipeline
+        return run_pipeline(force=True)
+    except Exception as exc:
+        log.debug("OSWS pipeline not available: %s", exc)
+        return 0
+
+
 def bootstrap_from_api(force: bool = False) -> int:
     """
     Bootstrap the player database from the live HudStats API, with automatic
@@ -314,6 +327,8 @@ def bootstrap_from_api(force: bool = False) -> int:
             return len(existing)
 
     log.info("Fetching players from HudStats API...")
+    # Also populate OSWS DB (best-effort)
+    _try_osws_bootstrap()
     try:
         players = asyncio.run(_fetch_players())
     except Exception as exc:
@@ -322,6 +337,7 @@ def bootstrap_from_api(force: bool = False) -> int:
 
     if len(players) >= 10:
         log.info("Received %d players from API. Computing ELO + PWR...", len(players))
+        inserted = 0
         for i, player in enumerate(players):
             # If the API didn't supply a rank, use list position
             if not player.get("rank") or player["rank"] == 999:
@@ -332,10 +348,14 @@ def bootstrap_from_api(force: bool = False) -> int:
                 int(player.get("rank") or 83),
             )
             player["pwr_rating"] = compute_pwr(player)
-            upsert_player_sync(player)
+            try:
+                upsert_player_sync(player)
+                inserted += 1
+            except Exception as exc:
+                log.warning("Failed to upsert player %s: %s", player.get("name"), exc)
 
-        log.info("Bootstrapped %d players from HudStats API.", len(players))
-        return len(players)
+        log.info("Bootstrapped %d/%d players from HudStats API.", inserted, len(players))
+        return inserted
 
     # API unavailable or returned insufficient data — use embedded CSV seed
     log.warning(
@@ -348,10 +368,15 @@ def bootstrap_from_api(force: bool = False) -> int:
 def _seed_from_csv() -> int:
     """Seed the database from the embedded 166-player CSV constant."""
     players = bootstrap_from_csv()
+    inserted = 0
     for player in players:
-        upsert_player_sync(player)
-    log.info("Seeded %d players from embedded CSV.", len(players))
-    return len(players)
+        try:
+            upsert_player_sync(player)
+            inserted += 1
+        except Exception as exc:
+            log.warning("Failed to upsert CSV player %s: %s", player.get("name"), exc)
+    log.info("Seeded %d/%d players from embedded CSV.", inserted, len(players))
+    return inserted
 
 
 if __name__ == "__main__":
