@@ -61,14 +61,19 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
 
 async def _seed_if_needed() -> None:
-    """Bootstrap the players table from the live HudStats API if it is empty."""
+    """Bootstrap the players table from the live HudStats API if it has fewer than 10 players.
+    Falls back to the embedded CSV seed data if the API returns insufficient players."""
     try:
         players = await get_all_players_async()
-        if len(players) == 0:
-            log.info("Players table empty — bootstrapping from HudStats API...")
+        if len(players) < 10:
+            log.info(
+                "Players table has %d players (< 10) — bootstrapping...",
+                len(players),
+            )
             loop = asyncio.get_event_loop()
             await loop.run_in_executor(None, _run_bootstrap)
-            log.info("API bootstrap complete.")
+            refreshed = await get_all_players_async()
+            log.info("Bootstrap complete. Players in DB: %d", len(refreshed))
         else:
             log.info("Players table has %d players — skipping bootstrap.", len(players))
     except Exception as exc:

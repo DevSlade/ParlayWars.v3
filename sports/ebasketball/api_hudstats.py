@@ -59,7 +59,11 @@ class HudStatsClient:
             cache.set(cache_key, data, ttl=300)
             return data
         except httpx.HTTPStatusError as exc:
-            log.warning("HudStats HTTP error %s for %s: %s", exc.response.status_code, path, exc)
+            status_code = exc.response.status_code
+            if status_code == 404:
+                log.debug("HudStats 404 for %s (endpoint not available)", path)
+            else:
+                log.warning("HudStats HTTP error %s for %s: %s", status_code, path, exc)
         except Exception as exc:
             log.warning("HudStats request failed for %s: %s", path, exc)
         return None
@@ -77,8 +81,12 @@ class HudStatsClient:
         return parse_hudstats_response(data)
 
     async def get_live_matches(self) -> List[Dict[str, Any]]:
-        """Fetch currently live matches."""
+        """Fetch currently live matches. Tries multiple endpoint patterns."""
         data = await self._get("/matches/live")
+        if data is None:
+            data = await self._get("/match/live")
+        if data is None:
+            data = await self._get("/live")
         if data is None:
             return []
         matches_raw = data.get("matches") or data.get("data") or (data if isinstance(data, list) else [])
