@@ -125,7 +125,72 @@ class PerformanceTracker:
             daily[date] = daily.get(date, 0.0) + bet["profit_loss"]
         return {k: round(v, 2) for k, v in sorted(daily.items())}
 
-    def engine_breakdown(self) -> Dict[str, Dict[str, Any]]:
+    def drawdown_chart_data(self) -> List[Dict[str, Any]]:
+        """
+        Return bankroll history annotated with drawdown values for chart shading.
+        Each point: {ts, balance, peak, drawdown, drawdown_pct}
+        """
+        if not self._bankroll_history:
+            return []
+        result = []
+        peak = self._bankroll_history[0][1]
+        for ts, balance in self._bankroll_history:
+            if balance > peak:
+                peak = balance
+            dd = round(peak - balance, 2)
+            dd_pct = round(dd / peak * 100.0, 2) if peak > 0 else 0.0
+            result.append({"ts": ts, "balance": balance, "peak": round(peak, 2),
+                            "drawdown": dd, "drawdown_pct": dd_pct})
+        return result
+
+    def best_streak(self) -> int:
+        """Longest win streak (positive number) in history."""
+        if not self._bets:
+            return 0
+        best = cur = 0
+        for b in self._bets:
+            if b["won"]:
+                cur += 1
+                best = max(best, cur)
+            else:
+                cur = 0
+        return best
+
+    def worst_streak(self) -> int:
+        """Longest loss streak (returned as a negative number) in history."""
+        if not self._bets:
+            return 0
+        worst = cur = 0
+        for b in self._bets:
+            if not b["won"]:
+                cur += 1
+                worst = max(worst, cur)
+            else:
+                cur = 0
+        return -worst
+
+    def accuracy_by_tier(self) -> Dict[str, Dict[str, Any]]:
+        """
+        Win rate per confidence tier (LOCK / STRONG / LEAN / SKIP).
+        Requires that bets have a 'tier' key set when recorded.
+        """
+        tiers: Dict[str, Dict] = {}
+        for bet in self._bets:
+            tier = bet.get("tier", "SKIP")
+            if tier not in tiers:
+                tiers[tier] = {"bets": 0, "wins": 0}
+            tiers[tier]["bets"] += 1
+            if bet.get("won"):
+                tiers[tier]["wins"] += 1
+        result = {}
+        for tier, data in tiers.items():
+            n = data["bets"]
+            result[tier] = {
+                "bets": n,
+                "wins": data["wins"],
+                "hit_rate": round(data["wins"] / n * 100.0, 1) if n > 0 else 0.0,
+            }
+        return result
         """P/L and win rate broken down by engine."""
         engines: Dict[str, Dict] = {}
         for bet in self._bets:

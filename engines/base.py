@@ -37,9 +37,19 @@ class BaseEngine(ABC):
         """Return a JSON-serialisable dict describing the model's tree structure for D3.js."""
 
     def confidence_tier(self, prob: float) -> str:
-        """Classify a probability into a confidence tier."""
+        """
+        Classify a win probability into a named confidence tier.
+
+        Tiers:
+            LOCK   (75%+)    — highest conviction
+            STRONG (65-74%)  — strong pick
+            LEAN   (56-64%)  — slight lean
+            SKIP   (<56%)    — too close to call
+        """
+        if prob >= 0.75:
+            return "LOCK"
         if prob >= 0.65:
-            return "HIGH"
-        if prob >= 0.55:
-            return "MEDIUM"
-        return "LOW"
+            return "STRONG"
+        if prob >= 0.56:
+            return "LEAN"
+        return "SKIP"

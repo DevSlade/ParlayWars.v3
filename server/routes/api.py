@@ -3,16 +3,21 @@ ParlayWars v3 — REST API Routes
 Date: 2026-02-25
 
 Endpoints:
-  GET  /api/players            — All players with stats
-  GET  /api/players/{name}     — Single player profile
-  GET  /api/matches            — Recent/live/upcoming matches
-  GET  /api/predictions        — Recent predictions
-  POST /api/predict            — Request prediction for two players
-  GET  /api/h2h/{a}/{b}        — H2H comparison
-  GET  /api/engines            — Engine status and tree data
-  GET  /api/stats              — Platform statistics
-  GET  /api/sim                — Simulation summary
-  PUT  /api/config             — Update configuration
+  GET  /api/players                 — All players with stats
+  GET  /api/players/{name}          — Single player profile
+  GET  /api/matches                 — Recent/live/upcoming matches
+  GET  /api/predictions             — Recent predictions
+  POST /api/predict                 — Request prediction for two players
+  GET  /api/h2h/{a}/{b}             — H2H comparison
+  GET  /api/engines                 — Engine status and tree data
+  GET  /api/engines/accuracy        — Per-engine accuracy + tier breakdown
+  GET  /api/stats                   — Platform statistics
+  GET  /api/stats/regression        — Regression / bounce-back candidates
+  GET  /api/sim                     — Simulation summary (with drawdown data)
+  GET  /api/bets/{id}/postmortem    — Post-game "What Happened?" analysis
+  GET  /api/freshness               — Last API sync timestamps
+  PUT  /api/config                  — Update configuration
+  GET  /api/config                  — Read configuration
 """
 from __future__ import annotations
 
@@ -238,15 +243,21 @@ async def get_sim_summary() -> Dict[str, Any]:
     bets = await get_bets_async(limit=500)
     history = await get_bankroll_history_async(limit=200)
     summary = tracker.summary(bankroll_manager.starting_balance)
+    # Build drawdown-annotated chart data; fall back to DB history if tracker is empty
+    drawdown_data = tracker.drawdown_chart_data() or [
+        {"ts": h["timestamp"], "balance": h["balance"], "peak": h["balance"],
+         "drawdown": 0, "drawdown_pct": 0}
+        for h in history
+    ]
     return {
         "bankroll": round(bankroll_manager.balance, 2),
         "starting_bankroll": bankroll_manager.starting_balance,
         "summary": summary,
+        "best_streak": tracker.best_streak(),
+        "worst_streak": tracker.worst_streak(),
         "engine_breakdown": tracker.engine_breakdown(),
         "pl_by_day": tracker.pl_by_day(),
-        "bankroll_chart": tracker.bankroll_chart_data() or [
-            {"ts": h["timestamp"], "balance": h["balance"]} for h in history
-        ],
+        "bankroll_chart": drawdown_data,
         "recent_bets": bets[:20],
         "parlay_history": [b for b in bets if b.get("bet_type") == "parlay"][:10],
     }
@@ -263,3 +274,178 @@ async def update_config(update: ConfigUpdate) -> Dict[str, Any]:
 async def get_config() -> Dict[str, Any]:
     """Return current configuration."""
     return cfg.data
+
+
+# ── Engine accuracy tracker ───────────────────────────────────────────────────
+
+@router.get("/engines/accuracy")
+async def get_engine_accuracy() -> Dict[str, Any]:
+    """
+    Return per-engine prediction accuracy vs settled bet outcomes.
+    Also breaks down by confidence tier (LOCK/STRONG/LEAN/SKIP).
+    """
+    from core.database import get_async_conn
+    async with get_async_conn() as conn:
+        # For each engine, join predictions to settled bets
+        cursor = await conn.execute(
+            """
+            SELECT p.engine_name,
+                   p.tier,
+                   p.predicted_winner,
+                   b.actual_winner,
+                   CASE WHEN p.predicted_winner = b.actual_winner THEN 1 ELSE 0 END AS correct
+            FROM predictions p
+            JOIN bets b ON b.match_id = p.match_id AND b.engine_used = p.engine_name
+            WHERE b.status IN ('won','lost')
+            """
+        )
+        rows = await cursor.fetchall()
+
+    by_engine: Dict[str, Dict] = {}
+    by_tier: Dict[str, Dict] = {}
+    for row in rows:
+        eng = row["engine_name"]
+        tier = row["tier"] or "SKIP"
+        correct = bool(row["correct"])
+
+        if eng not in by_engine:
+            by_engine[eng] = {"correct": 0, "total": 0}
+        by_engine[eng]["total"] += 1
+        if correct:
+            by_engine[eng]["correct"] += 1
+
+        tier_key = f"{eng}:{tier}"
+        if tier_key not in by_tier:
+            by_tier[tier_key] = {"engine": eng, "tier": tier, "correct": 0, "total": 0}
+        by_tier[tier_key]["total"] += 1
+        if correct:
+            by_tier[tier_key]["correct"] += 1
+
+    engine_acc = {
+        eng: {
+            "total": d["total"],
+            "accuracy": round(d["correct"] / d["total"] * 100, 1) if d["total"] > 0 else 0.0,
+        }
+        for eng, d in by_engine.items()
+    }
+    tier_acc = [
+        {
+            "engine": d["engine"], "tier": d["tier"],
+            "total": d["total"],
+            "accuracy": round(d["correct"] / d["total"] * 100, 1) if d["total"] > 0 else 0.0,
+        }
+        for d in by_tier.values()
+    ]
+    return {
+        "by_engine": engine_acc,
+        "by_tier": sorted(tier_acc, key=lambda x: (x["engine"], x["tier"])),
+        "sim_accuracy_by_tier": tracker.accuracy_by_tier(),
+        "best_streak": tracker.best_streak(),
+        "worst_streak": tracker.worst_streak(),
+        "current_streak": tracker.current_streak(),
+    }
+
+
+# ── Regression / bounce-back detection ───────────────────────────────────────
+
+@router.get("/stats/regression")
+async def get_regression_candidates() -> Dict[str, Any]:
+    """
+    Return players flagged as REGRESSION CANDIDATES (recent WR >> career WR)
+    or BOUNCE-BACK CANDIDATES (recent WR << career WR).
+    Threshold: 10 percentage-point gap.
+    """
+    players = await get_all_players_async()
+    regression = []
+    bounce_back = []
+    for p in players:
+        career = float(p.get("win_pct") or 50.0)
+        recent = float(p.get("recent_win_pct") or career)
+        gap = recent - career
+        if gap >= 10.0:
+            regression.append({
+                "name": p["name"], "career_wr": career,
+                "recent_wr": recent, "gap": round(gap, 1),
+            })
+        elif gap <= -10.0:
+            bounce_back.append({
+                "name": p["name"], "career_wr": career,
+                "recent_wr": recent, "gap": round(gap, 1),
+            })
+    # Sort by absolute gap descending
+    regression.sort(key=lambda x: -x["gap"])
+    bounce_back.sort(key=lambda x: x["gap"])
+    return {"regression_candidates": regression, "bounce_back_candidates": bounce_back}
+
+
+# ── Postmortem — "What Happened?" on a losing bet ────────────────────────────
+
+@router.get("/bets/{bet_id}/postmortem")
+async def get_bet_postmortem(bet_id: int) -> Dict[str, Any]:
+    """
+    For a settled bet, return full post-game analysis:
+    - What each engine predicted
+    - What actually happened
+    - Which engine was correct / dissenting
+    - Score of the match (if available)
+    """
+    from core.database import get_async_conn
+    async with get_async_conn() as conn:
+        # Fetch the bet
+        cursor = await conn.execute("SELECT * FROM bets WHERE id=?", (bet_id,))
+        bet = await cursor.fetchone()
+        if not bet:
+            raise HTTPException(status_code=404, detail="Bet not found")
+        bet = dict(bet)
+
+        match_id = bet.get("match_id")
+        match: Optional[Dict] = None
+        engine_preds: List[Dict] = []
+
+        if match_id:
+            cursor = await conn.execute("SELECT * FROM matches WHERE id=?", (match_id,))
+            m = await cursor.fetchone()
+            if m:
+                match = dict(m)
+
+            cursor = await conn.execute(
+                "SELECT * FROM predictions WHERE match_id=?", (match_id,)
+            )
+            preds_rows = await cursor.fetchall()
+            engine_preds = [dict(r) for r in preds_rows]
+
+    dissenting = [
+        p["engine_name"] for p in engine_preds
+        if p.get("predicted_winner") == bet.get("actual_winner")
+        and p.get("engine_name") != bet.get("engine_used")
+    ]
+
+    return {
+        "bet": bet,
+        "match": match,
+        "engine_predictions": engine_preds,
+        "correct_engines": [
+            p["engine_name"] for p in engine_preds
+            if p.get("predicted_winner") == bet.get("actual_winner")
+        ],
+        "dissenting_engines": dissenting,
+        "summary": (
+            f"{bet.get('engine_used','?')} predicted {bet.get('predicted_winner','?')} "
+            f"but {bet.get('actual_winner','?')} won. "
+            + (f"Dissenting engine(s) were correct: {', '.join(dissenting)}." if dissenting else "No engine predicted correctly.")
+        ),
+    }
+
+
+# ── Data freshness ────────────────────────────────────────────────────────────
+
+@router.get("/freshness")
+async def get_data_freshness() -> Dict[str, Any]:
+    """Return last successful API sync timestamps."""
+    from core.cache import cache
+    last_hudstats  = cache.get("_last_sync:hudstats") or None
+    last_esb       = cache.get("_last_sync:esportsbattle") or None
+    return {
+        "hudstats":      last_hudstats,
+        "esportsbattle": last_esb,
+    }

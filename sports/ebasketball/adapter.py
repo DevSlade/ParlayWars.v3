@@ -86,7 +86,8 @@ class EBasketballAdapter(BaseSportAdapter):
         return None
 
     async def get_all_players(self) -> List[Dict[str, Any]]:
-        """Return all players with computed metrics."""
+        """Return all players with computed metrics. Timestamps a cache key on success."""
+        from datetime import datetime, timezone
         try:
             players = await hudstats_client.get_all_players()
             if players:
@@ -94,6 +95,10 @@ class EBasketballAdapter(BaseSportAdapter):
                 for p in players:
                     metrics = compute_all_metrics(p)
                     p.update(metrics)
+                # Record freshness timestamp
+                from core.cache import cache
+                cache.set("_last_sync:hudstats",
+                          datetime.now(tz=timezone.utc).isoformat(), ttl=0)
                 return players
         except Exception as exc:
             log.warning("HudStats all-players fetch failed: %s", exc)
