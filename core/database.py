@@ -533,3 +533,11 @@ def log_training_sync(engine_name: str, accuracy: float, features: List[str], hy
                VALUES (?, ?, ?, ?, ?)""",
             (engine_name, accuracy, json.dumps(features), json.dumps(hyperparams), samples),
         )
+
+
+# ── Auto-initialise on import ─────────────────────────────────────────────────
+# Ensure tables exist whenever this module is loaded (sync, lightweight).
+try:
+    init_db_sync()
+except Exception as _db_init_err:  # pragma: no cover
+    log.warning("Auto DB init failed: %s", _db_init_err)
