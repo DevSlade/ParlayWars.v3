@@ -5,7 +5,7 @@ Date: 2026-02-25
 Usage:
     python main.py                         # Start server with config.yaml defaults
     python main.py --port 8080             # Custom port
-    python main.py --seed                  # Re-seed the database from TSV
+    python main.py --bootstrap             # Bootstrap the database from HudStats API
     python main.py --retrain               # Force retrain all engines then exit
 
 Cloudflare Tunnel (for remote access from any device):
@@ -29,7 +29,7 @@ def main() -> None:
     )
     parser.add_argument("--host", default=None, help="Server host (overrides config.yaml)")
     parser.add_argument("--port", type=int, default=None, help="Server port (overrides config.yaml)")
-    parser.add_argument("--seed", action="store_true", help="(Re)seed database from players_seed.tsv and exit")
+    parser.add_argument("--bootstrap", action="store_true", help="Bootstrap database from HudStats API and exit")
     parser.add_argument("--retrain", action="store_true", help="Force retrain all engines and exit")
     parser.add_argument("--no-reload", action="store_true", help="Disable auto-reload (production mode)")
     args = parser.parse_args()
@@ -39,10 +39,10 @@ def main() -> None:
 
     setup_logging()
 
-    if args.seed:
-        from scripts.seed_database import seed_all
-        count = seed_all()
-        print(f"✅ Seeded {count} players.")
+    if args.bootstrap:
+        from scripts.seed_database import bootstrap_from_api
+        count = bootstrap_from_api(force=True)
+        print(f"✅ Bootstrapped {count} players from HudStats API.")
         return
 
     if args.retrain:

@@ -61,24 +61,24 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
 
 async def _seed_if_needed() -> None:
-    """Seed the players table from TSV if it's empty."""
+    """Bootstrap the players table from the live HudStats API if it is empty."""
     try:
         players = await get_all_players_async()
         if len(players) == 0:
-            log.info("Players table empty — seeding from TSV...")
+            log.info("Players table empty — bootstrapping from HudStats API...")
             loop = asyncio.get_event_loop()
-            await loop.run_in_executor(None, _run_seed)
-            log.info("Seed complete.")
+            await loop.run_in_executor(None, _run_bootstrap)
+            log.info("API bootstrap complete.")
         else:
-            log.info("Players table has %d players — skipping seed.", len(players))
+            log.info("Players table has %d players — skipping bootstrap.", len(players))
     except Exception as exc:
-        log.error("Seed failed: %s", exc)
+        log.error("Bootstrap failed: %s", exc)
 
 
-def _run_seed() -> None:
-    """Synchronous seed function (run in executor)."""
-    from scripts.seed_database import seed_all
-    seed_all()
+def _run_bootstrap() -> None:
+    """Synchronous wrapper for the API bootstrap (runs in thread executor)."""
+    from scripts.seed_database import bootstrap_from_api
+    bootstrap_from_api(force=False)
 
 
 async def _train_engines() -> None:

@@ -30,7 +30,6 @@ DEFAULTS: Dict[str, Any] = {
         "surge": {"enabled": True},
         "oracle": {"enabled": True, "hidden_size": 32},
     },
-    "seed": {"tsv_path": "data/seed/players_seed.tsv"},
 }
 
 

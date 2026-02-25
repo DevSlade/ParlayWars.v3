@@ -66,53 +66,15 @@ class HudStatsClient:
 
     async def get_all_players(self) -> List[Dict[str, Any]]:
         """
-        Fetch all player stats from the participant/nba endpoint.
-        Returns a list of player dicts (mapped to our schema).
+        Fetch all player stats from the /participant/nba endpoint and parse
+        them via ``sports.ebasketball.parser.parse_hudstats_response``.
+
+        Returns a list of player dicts ready for the database.
+        This is the sole source of truth for player data — no static files.
         """
+        from sports.ebasketball.parser import parse_hudstats_response  # avoid circular import
         data = await self._get("/participant/nba")
-        if data is None:
-            return []
-        # API may return dict with 'participants' key or a list directly
-        if isinstance(data, dict):
-            players_raw = data.get("participants") or data.get("data") or data.get("players") or []
-        elif isinstance(data, list):
-            players_raw = data
-        else:
-            return []
-
-        return [self._map_player(p) for p in players_raw if isinstance(p, dict)]
-
-    def _map_player(self, raw: Dict[str, Any]) -> Dict[str, Any]:
-        """Normalise a HudStats player record to our player schema."""
-        name = str(raw.get("nickname") or raw.get("name") or raw.get("username") or "UNKNOWN").upper()
-        total = int(raw.get("games") or raw.get("total_games") or 0)
-        wins = int(raw.get("wins") or 0)
-        losses = total - wins
-        win_pct = float(raw.get("win_rate") or raw.get("win_pct") or (wins / total * 100 if total > 0 else 50))
-        recent_win_pct = float(raw.get("recent_win_rate") or raw.get("last10_win_pct") or win_pct)
-
-        # Form: last 10 results as W/L list (newest first)
-        form_raw = raw.get("form") or raw.get("last_results") or []
-        form = []
-        for r in form_raw[:10]:
-            if isinstance(r, str):
-                form.append("W" if r.upper() in ("W", "WIN", "1") else "L")
-            elif isinstance(r, int):
-                form.append("W" if r == 1 else "L")
-
-        return {
-            "name": name,
-            "sport": "ebasketball",
-            "win_pct": round(win_pct, 1),
-            "recent_win_pct": round(recent_win_pct, 1),
-            "total_games": total,
-            "wins": wins,
-            "losses": losses,
-            "form": form,
-            "avg_points": float(raw.get("avg_points") or raw.get("avg_score") or 45.0),
-            "avg_fg_pct": float(raw.get("fg_pct") or raw.get("field_goal_pct") or 0.45),
-            "source": "hudstats",
-        }
+        return parse_hudstats_response(data)
 
     async def get_live_matches(self) -> List[Dict[str, Any]]:
         """Fetch currently live matches."""

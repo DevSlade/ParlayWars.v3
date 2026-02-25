@@ -67,6 +67,3 @@ engines:
   oracle:
     enabled: true
     hidden_size: 32
-
-seed:
-  tsv_path: "data/seed/players_seed.tsv"
