@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ParlayWars v3 — 2K eBasketball AI</title>
+  <link rel="stylesheet" href="/css/style.css">
+  <!-- Alpine.js for reactive UI (Safari-compatible) -->
+  <script defer src="https://unpkg.com/alpinejs@3.13.3/dist/cdn.min.js"></script>
+  <!-- D3.js for tree visualizations -->
+  <script src="https://d3js.org/d3.v7.min.js"></script>
+  <!-- Chart.js for bankroll charts -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+</head>
+<body x-data="app()" x-init="init()">
+
+  <!-- ── Header ──────────────────────────────────────────────────── -->
+  <header class="header">
+    <div class="header-brand">
+      <span class="brand-icon">⚡</span>
+      <span class="brand-name">ParlayWars <span class="brand-v3">v3</span></span>
+    </div>
+    <nav class="tab-nav">
+      <template x-for="tab in tabs" :key="tab.id">
+        <button
+          class="tab-btn"
+          :class="{ active: currentTab === tab.id }"
+          @click="switchTab(tab.id)"
+          x-text="tab.label"
+        ></button>
+      </template>
+    </nav>
+    <div class="header-meta">
+      <span class="bankroll-badge">
+        💰 $<span x-text="stats.bankroll?.toFixed(2) || '1000.00'"></span>
+      </span>
+      <span class="status-dot" :class="wsConnected ? 'connected' : 'disconnected'"></span>
+    </div>
+  </header>
+
+  <!-- ── Tab Content ──────────────────────────────────────────────── -->
+  <main class="main-content">
+
+    <!-- Dashboard Tab -->
+    <div x-show="currentTab === 'dashboard'" x-cloak>
+      <div id="dashboard-root"></div>
+    </div>
+
+    <!-- Players Tab -->
+    <div x-show="currentTab === 'players'" x-cloak>
+      <div id="players-root"></div>
+    </div>
+
+    <!-- Predictions Tab -->
+    <div x-show="currentTab === 'predictions'" x-cloak>
+      <div id="predictions-root"></div>
+    </div>
+
+    <!-- H2H Tab -->
+    <div x-show="currentTab === 'h2h'" x-cloak>
+      <div id="h2h-root"></div>
+    </div>
+
+    <!-- Trees Tab -->
+    <div x-show="currentTab === 'trees'" x-cloak>
+      <div id="trees-root"></div>
+    </div>
+
+    <!-- Simulator Tab -->
+    <div x-show="currentTab === 'sim'" x-cloak>
+      <div id="sim-root"></div>
+    </div>
+
+    <!-- Console Tab -->
+    <div x-show="currentTab === 'console'" x-cloak>
+      <div id="console-root"></div>
+    </div>
+
+    <!-- Settings Tab -->
+    <div x-show="currentTab === 'settings'" x-cloak>
+      <div id="settings-root"></div>
+    </div>
+
+    <!-- Export Tab -->
+    <div x-show="currentTab === 'export'" x-cloak>
+      <div id="export-root"></div>
+    </div>
+
+  </main>
+
+  <!-- ── Modal ──────────────────────────────────────────────────────── -->
+  <div class="modal-overlay" x-show="modal.open" @click.self="modal.open=false" x-cloak>
+    <div class="modal-box">
+      <button class="modal-close" @click="modal.open=false">✕</button>
+      <div x-html="modal.content"></div>
+    </div>
+  </div>
+
+  <!-- ── Scripts ─────────────────────────────────────────────────── -->
+  <script src="/js/app.js"></script>
+  <script src="/js/dashboard.js"></script>
+  <script src="/js/players.js"></script>
+  <script src="/js/trees.js"></script>
+  <script src="/js/sim.js"></script>
+  <script src="/js/h2h.js"></script>
+  <script src="/js/settings.js"></script>
+
+</body>
+</html>

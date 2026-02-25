@@ -1,0 +1,51 @@
+# ParlayWars v3 — .gitignore
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+.venv/
+venv/
+env/
+ENV/
+*.env
+
+# Database files (not committed — generated at runtime)
+data/db/
+data/cache/
+data/exports/
+data/*.log
+
+# Model files
+data/models/
+*.pkl
+*.joblib
+*.pt
+*.pth
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Keep gitkeep files
+!data/.gitkeep
+!data/seed/
+!data/seed/players_seed.tsv
+__pycache__/
+*.pyc
